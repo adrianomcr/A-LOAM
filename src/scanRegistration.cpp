@@ -39,7 +39,7 @@
 #include <vector>
 #include <string>
 #include "aloam_velodyne/common.h"
-#include "aloam_velodyne/tic_toc.h"
+#include "aloam_velodyne/tic_toc.h" //Time counter
 #include <nav_msgs/Odometry.h>
 #include <opencv/cv.h>
 #include <pcl_conversions/pcl_conversions.h>
@@ -113,6 +113,7 @@ void removeClosedPointCloud(const pcl::PointCloud<PointT> &cloud_in,
 
 void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg)
 {
+    //Receive some messages before starting the computation
     if (!systemInited)
     { 
         systemInitCount++;
@@ -124,25 +125,32 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg)
             return;
     }
 
+    //Initialize time counters
     TicToc t_whole;
     TicToc t_prepare;
+    //Initialize ......
     std::vector<int> scanStartInd(N_SCANS, 0);
     std::vector<int> scanEndInd(N_SCANS, 0);
 
+    //Convert the ros message to a point cloud from the pcl library
     pcl::PointCloud<pcl::PointXYZ> laserCloudIn;
     pcl::fromROSMsg(*laserCloudMsg, laserCloudIn);
     std::vector<int> indices;
 
+    //Remove points that cntain no data (Not a number point)
     pcl::removeNaNFromPointCloud(laserCloudIn, laserCloudIn, indices);
+    //Remove point that are too close to the sensor
     removeClosedPointCloud(laserCloudIn, laserCloudIn, MINIMUM_RANGE);
 
-
+    //Get the number of points in the pointcloud
     int cloudSize = laserCloudIn.points.size();
+    //...
     float startOri = -atan2(laserCloudIn.points[0].y, laserCloudIn.points[0].x);
     float endOri = -atan2(laserCloudIn.points[cloudSize - 1].y,
                           laserCloudIn.points[cloudSize - 1].x) +
                    2 * M_PI;
 
+    //Wrap the difference startOri-endtOri to be between pi and 3*pi
     if (endOri - startOri > 3 * M_PI)
     {
         endOri -= 2 * M_PI;
@@ -156,19 +164,30 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg)
     bool halfPassed = false;
     int count = cloudSize;
     PointType point;
+    //Create a vector of pointclouds, one element for each scan
     std::vector<pcl::PointCloud<PointType>> laserCloudScans(N_SCANS);
+    //Iterate over all of the points in the pointcloud
     for (int i = 0; i < cloudSize; i++)
     {
+        //Get current point
         point.x = laserCloudIn.points[i].x;
         point.y = laserCloudIn.points[i].y;
         point.z = laserCloudIn.points[i].z;
 
+        //Get the "pitch" angle of the point (constant in each scan)
         float angle = atan(point.z / sqrt(point.x * point.x + point.y * point.y)) * 180 / M_PI;
         int scanID = 0;
 
+
         if (N_SCANS == 16)
         {
+            /*
+            For the case of 16 scans (VLP16), the angles are:
+            [-15.0, -13.0, -11.0, -9.0, -7.0, -5.0, -3.0, -1.0, 1.0, 3.0, 5.0, 7.0, 9.0, 11.0, 13.0, 15.0]
+            */
+            //Get the id for the scan the point belongs to
             scanID = int((angle + 15) / 2 + 0.5);
+            //If the point does not fit in one of the scans, neglect it and continue
             if (scanID > (N_SCANS - 1) || scanID < 0)
             {
                 count--;
@@ -177,6 +196,10 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg)
         }
         else if (N_SCANS == 32)
         {
+            /*
+            For the case of 16 scans (VLP32), the angles are:
+            [...]
+            */
             scanID = int((angle + 92.0/3.0) * 3.0 / 4.0);
             if (scanID > (N_SCANS - 1) || scanID < 0)
             {
@@ -185,7 +208,11 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg)
             }
         }
         else if (N_SCANS == 64)
-        {   
+        {
+            /*
+            For the case of 16 scans (VLP16), the angles are:
+            [-15.0, -13.0, -11.0, -9.0, -7.0, -5.0, -3.0, -1.0, 1.0, 3.0, 5.0, 7.0, 9.0, 11.0, 13.0, 15.0]
+            */
             if (angle >= -8.83)
                 scanID = int((2 - angle) * 3.0 + 0.5);
             else
@@ -199,7 +226,8 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg)
             }
         }
         else
-        {
+        {   
+            //Report wrong scan
             printf("wrong scan number\n");
             ROS_BREAK();
         }
@@ -458,46 +486,67 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg)
         ROS_WARN("scan registration process over 100ms");
 }
 
+
+//Main function
 int main(int argc, char **argv)
 {
+    //Initialize the node "Scan Registration"
     ros::init(argc, argv, "scanRegistration");
     ros::NodeHandle nh;
 
+    //Get (rosparam) the type of pointcloud according to the number of scans it has (16, 32, ...)
     nh.param<int>("scan_line", N_SCANS, 16);
 
+    //Get (rosparam) minimum distance of each point in order for it to be used
     nh.param<double>("minimum_range", MINIMUM_RANGE, 0.1);
 
+    //Print the type of point clound the software is configured to
     printf("scan line number %d \n", N_SCANS);
-
+    //Report if the number of scans is not supported
     if(N_SCANS != 16 && N_SCANS != 32 && N_SCANS != 64)
     {
         printf("only support velodyne with 16, 32 or 64 scan line!");
         return 0;
     }
 
+    //Subscriber to the original pointcloud
     ros::Subscriber subLaserCloud = nh.subscribe<sensor_msgs::PointCloud2>("/velodyne_points", 100, laserCloudHandler);
 
+    //Publisher ...
     pubLaserCloud = nh.advertise<sensor_msgs::PointCloud2>("/velodyne_cloud_2", 100);
 
+    //Publisher ...
     pubCornerPointsSharp = nh.advertise<sensor_msgs::PointCloud2>("/laser_cloud_sharp", 100);
 
+    //Publisher ...
     pubCornerPointsLessSharp = nh.advertise<sensor_msgs::PointCloud2>("/laser_cloud_less_sharp", 100);
 
+    //Publisher ...
     pubSurfPointsFlat = nh.advertise<sensor_msgs::PointCloud2>("/laser_cloud_flat", 100);
 
+    //Publisher ...
     pubSurfPointsLessFlat = nh.advertise<sensor_msgs::PointCloud2>("/laser_cloud_less_flat", 100);
 
+    //Publisher ...
     pubRemovePoints = nh.advertise<sensor_msgs::PointCloud2>("/laser_remove_points", 100);
 
+    //If desired
     if(PUB_EACH_LINE)
     {
+        //Publishers for point clouds that contain each individual scan separatelly
         for(int i = 0; i < N_SCANS; i++)
         {
+            //Define publisher
             ros::Publisher tmp = nh.advertise<sensor_msgs::PointCloud2>("/laser_scanid_" + std::to_string(i), 100);
+            //Append publisher to the vector of ros::Publisher
             pubEachScan.push_back(tmp);
         }
     }
+
+    //Keep listenning for the raw pointclouds
     ros::spin();
 
+
+    //Return
     return 0;
 }
