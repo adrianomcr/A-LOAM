@@ -197,7 +197,7 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg)
         else if (N_SCANS == 32)
         {
             /*
-            For the case of 16 scans (VLP32), the angles are:
+            For the case of 16 scans ( ), the angles are:
             [...]
             */
             scanID = int((angle + 92.0/3.0) * 3.0 / 4.0);
@@ -210,8 +210,8 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg)
         else if (N_SCANS == 64)
         {
             /*
-            For the case of 16 scans (VLP16), the angles are:
-            [-15.0, -13.0, -11.0, -9.0, -7.0, -5.0, -3.0, -1.0, 1.0, 3.0, 5.0, 7.0, 9.0, 11.0, 13.0, 15.0]
+            For the case of 64 scans ( ), the angles are:
+            [...]
             */
             if (angle >= -8.83)
                 scanID = int((2 - angle) * 3.0 + 0.5);
